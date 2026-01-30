@@ -28,7 +28,7 @@ localparam IDLE        = 2'b00,
 reg [1:0] state, next;
 
 //input counter used during TRANSACTION state
-reg [$clog2(TRANSACTION_SIZE)-1:0] transaction_cntr;
+reg [$clog2(TRANSACTION_SIZE+1)-1:0] transaction_cntr;
 
 //Adress/data input bits received before validation
 reg [TRANSACTION_SIZE-1:0] unvalidated_input;
@@ -101,10 +101,10 @@ always @(*) begin
         //Transaction starts on nCS falling edge
         IDLE: if (ncs_falling) next = TRANSACTION;
               else             next = IDLE;
-        TRANSACTION: if (transaction_cntr != 0) next = TRANSACTION;
+        TRANSACTION: if (transaction_cntr < TRANSACTION_SIZE) next = TRANSACTION;
                      else                              next = VALIDATION;
-        //ignore read transactions and address > max_address
-        VALIDATION: if ((address > MAX_ADDRESS) && !rw) next = IDLE;
+        //ignore read transactions or address > max_address
+        VALIDATION: if ((address > MAX_ADDRESS) || !rw) next = IDLE;
                     else                       next = UPDATE;
         UPDATE: next = IDLE;
     endcase
@@ -113,17 +113,17 @@ end
 //count and store input bits received during TRANSACTION state
 always @(posedge clk) begin
     if (!rst_n) begin
-        transaction_cntr <= TRANSACTION_SIZE-1;
+        transaction_cntr <= 0;
         unvalidated_input <= 0;
     end else begin
         if (state == IDLE) begin
-            transaction_cntr <= TRANSACTION_SIZE-1;
+            transaction_cntr <= 0;
             unvalidated_input <= 0;
         end else if (state == TRANSACTION && sclk_rising) begin
-            unvalidated_input[transaction_cntr] <= copi_sync1;
-            transaction_cntr <= transaction_cntr - 1;
+            unvalidated_input[TRANSACTION_SIZE - 1 - transaction_cntr] <= copi_sync1;
+            transaction_cntr <= transaction_cntr + 1;
         end
-    end       
+    end
 end
 assign {rw, address, data} = unvalidated_input;
 
