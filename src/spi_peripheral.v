@@ -98,12 +98,13 @@ end
 always @(*) begin
     next = 2'bx;
     case (state)
-        //Transaction starts on nCS falling edge and copi first bit is 1 (write)
+        //Transaction starts on nCS falling edge
         IDLE: if (ncs_falling) next = TRANSACTION;
               else             next = IDLE;
         TRANSACTION: if (transaction_cntr != 0) next = TRANSACTION;
                      else                              next = VALIDATION;
-        VALIDATION: if (address > MAX_ADDRESS) next = IDLE;
+        //ignore read transactions and address > max_address
+        VALIDATION: if ((address > MAX_ADDRESS) && !rw) next = IDLE;
                     else                       next = UPDATE;
         UPDATE: next = IDLE;
     endcase
