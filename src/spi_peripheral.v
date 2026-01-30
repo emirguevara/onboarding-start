@@ -28,12 +28,13 @@ localparam IDLE        = 2'b00,
 reg [1:0] state, next;
 
 //input counter used during TRANSACTION state
-reg [$clog2(TRANSACTION_SIZE-1)-1:0] transaction_cntr;
+reg [$clog2(TRANSACTION_SIZE)-1:0] transaction_cntr;
 
 //Adress/data input bits received before validation
-reg [TRANSACTION_SIZE-2:0] unvalidated_input;
+reg [TRANSACTION_SIZE-1:0] unvalidated_input;
 wire [ADDRESS_SIZE-1:0] address;
 wire [DATA_SIZE-1:0] data;
+wire rw;
 
 //first stage of the synchronizer
 reg sclk_sync0;
@@ -48,7 +49,6 @@ reg copi_sync1;
 //third stage used for edge detection
 reg sclk_sync2;
 reg ncs_sync2;
-reg copi_sync2;
 
 //wires for edge detection
 wire ncs_falling;
@@ -68,7 +68,6 @@ always @(posedge clk) begin
 
         sclk_sync2<= 0;
         ncs_sync2<= 1;
-        copi_sync2<= 0;
     end else begin
         sclk_sync0 <= SCLK;
         ncs_sync0 <= nCS;
@@ -80,7 +79,7 @@ always @(posedge clk) begin
 
         sclk_sync2 <=  sclk_sync1;
         ncs_sync2 <= ncs_sync1;
-        copi_sync2 <= copi_sync1;
+
     end
     
 end
@@ -100,10 +99,10 @@ always @(*) begin
     next = 2'bx;
     case (state)
         //Transaction starts on nCS falling edge and copi first bit is 1 (write)
-        IDLE: if (ncs_falling & copi_sync2) next = TRANSACTION;
-              else                          next = IDLE;
-        TRANSACTION: if (transaction_cntr < (TRANSACTION_SIZE - 1)) next = TRANSACTION;
-                     else                                           next = VALIDATION;
+        IDLE: if (ncs_falling) next = TRANSACTION;
+              else             next = IDLE;
+        TRANSACTION: if (transaction_cntr != 0) next = TRANSACTION;
+                     else                              next = VALIDATION;
         VALIDATION: if (address > MAX_ADDRESS) next = IDLE;
                     else                       next = UPDATE;
         UPDATE: next = IDLE;
@@ -113,17 +112,19 @@ end
 //count and store input bits received during TRANSACTION state
 always @(posedge clk) begin
     if (!rst_n) begin
-        transaction_cntr <= TRANSACTION_SIZE -1;
+        transaction_cntr <= TRANSACTION_SIZE-1;
         unvalidated_input <= 0;
     end else begin
-        if (state != TRANSACTION) transaction_cntr <= TRANSACTION_SIZE - 1;
-        else if (sclk_rising && state == TRANSACTION) begin
-            unvalidated_input[transaction_cntr] <= copi_sync2;
+        if (state == IDLE) begin
+            transaction_cntr <= TRANSACTION_SIZE-1;
+            unvalidated_input <= 0;
+        end else if (state == TRANSACTION && sclk_rising) begin
+            unvalidated_input[transaction_cntr] <= copi_sync1;
             transaction_cntr <= transaction_cntr - 1;
         end
     end       
 end
-assign {address, data} = unvalidated_input;
+assign {rw, address, data} = unvalidated_input;
 
 //update register values during UPDATE
 always @(posedge clk) begin
