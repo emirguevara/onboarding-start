@@ -4,11 +4,11 @@ module spi_peripheral #(parameter W = 8) (
     input wire SCLK,
     input wire nCS,
     input wire COPI,
-    output reg [W-1:0] reg_0x00,
-    output reg [W-1:0] reg_0x01,
-    output reg [W-1:0] reg_0x02,
-    output reg [W-1:0] reg_0x03,
-    output reg [W-1:0] reg_0x04 
+    output reg [W-1:0] en_reg_out_7_0,
+    output reg [W-1:0] en_reg_out_15_8,
+    output reg [W-1:0] en_reg_pwm_7_0,
+    output reg [W-1:0] en_reg_pwm_15_8,
+    output reg [W-1:0] pwm_duty_cycle
 );
 
 //max address for registers
@@ -19,22 +19,12 @@ localparam ADDRESS_SIZE = 7;
 localparam DATA_SIZE = W;
 localparam TRANSACTION_SIZE = 1 + ADDRESS_SIZE + DATA_SIZE;
 
-//spi transaction stages
-localparam IDLE        = 2'b00,
-           TRANSACTION = 2'b01,
-           VALIDATION  = 2'b10,
-           UPDATE      = 2'b11;
-
-reg [1:0] state, next;
-
-//input counter used during TRANSACTION state
-reg [$clog2(TRANSACTION_SIZE+1)-1:0] transaction_cntr;
-
-//Adress/data input bits received before validation
-reg [TRANSACTION_SIZE-1:0] unvalidated_input;
 wire [ADDRESS_SIZE-1:0] address;
 wire [DATA_SIZE-1:0] data;
 wire rw;
+
+reg [TRANSACTION_SIZE-1:0] stream_in;
+reg [TRANSACTION_SIZE:0] ncs_shift_reg;
 
 //first stage of the synchronizer
 reg sclk_sync0;
@@ -53,99 +43,72 @@ reg ncs_sync2;
 //wires for edge detection
 wire ncs_falling;
 wire sclk_rising;
-wire ncs_rising;
+
+reg [W-1:0] registers [0:MAX_ADDRESS];
+assign en_reg_out_7_0 = registers[0];
+assign en_reg_out_15_8 = registers[1];
+assign en_reg_pwm_7_0 = registers[2];
+assign en_reg_pwm_15_8 = registers[3];
+assign pwm_duty_cycle = registers[4];
 
 //synchronizer
-always @(posedge clk) begin
+always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         sclk_sync0 <= 0;
         ncs_sync0 <= 1;
         copi_sync0 <= 0;
 
-        sclk_sync1<= 0;
-        ncs_sync1<= 1;
-        copi_sync1<= 0;
+        sclk_sync1 <= 0;
+        ncs_sync1 <= 1;
+        copi_sync1 <= 0;
 
-        sclk_sync2<= 0;
-        ncs_sync2<= 1;
+        sclk_sync2 <= 0;
+        ncs_sync2 <= 1;
     end else begin
         sclk_sync0 <= SCLK;
         ncs_sync0 <= nCS;
         copi_sync0 <= COPI;
         
-        sclk_sync1 <=  sclk_sync0;
+        sclk_sync1 <= sclk_sync0;
         ncs_sync1 <= ncs_sync0;
         copi_sync1 <= copi_sync0;
 
-        sclk_sync2 <=  sclk_sync1;
+        sclk_sync2 <= sclk_sync1;
         ncs_sync2 <= ncs_sync1;
-
     end
-    
 end
 
 //edge detection logic
-assign ncs_falling = ncs_sync2 & ~ncs_sync1;  
-assign ncs_rising  = ~ncs_sync2 & ncs_sync1;  
+assign ncs_falling = ncs_sync2 & ~ncs_sync1;
 assign sclk_rising = ~sclk_sync2 & sclk_sync1;
 
-//state machine to process R/W | address[6:0] | data [7:0]
-always @(posedge clk) begin
-    if (!rst_n) state <= IDLE;
-    else        state <= next;
-end
 
-always @(*) begin
-    next = 2'bx;
-    case (state)
-        //Transaction starts on nCS falling edge
-        IDLE: if (ncs_falling) next = TRANSACTION;
-              else             next = IDLE;
-        TRANSACTION: if (transaction_cntr < TRANSACTION_SIZE) next = TRANSACTION;
-                     else                              next = VALIDATION;
-        //ignore read transactions or address > max_address
-        VALIDATION: if ((address > MAX_ADDRESS) || !rw) next = IDLE;
-                    else                       next = UPDATE;
-        UPDATE: next = IDLE;
-    endcase
-end
-
-//count and store input bits received during TRANSACTION state
-always @(posedge clk) begin
+always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        transaction_cntr <= 0;
-        unvalidated_input <= 0;
+        stream_in <= 0;
+        ncs_shift_reg <= 0;
     end else begin
-        if (state == IDLE) begin
-            transaction_cntr <= 0;
-            unvalidated_input <= 0;
-        end else if (state == TRANSACTION && sclk_rising) begin
-            unvalidated_input[TRANSACTION_SIZE - 1 - transaction_cntr] <= copi_sync1;
-            transaction_cntr <= transaction_cntr + 1;
+        if (ncs_falling)
+            ncs_shift_reg <= {ncs_falling, ncs_shift_reg[TRANSACTION_SIZE-1:0]};
+        if (sclk_rising) begin
+            stream_in <= {stream_in[TRANSACTION_SIZE-2:0],copi_sync1};
+            ncs_shift_reg <= ncs_shift_reg >> 1;
         end
     end
 end
-assign {rw, address, data} = unvalidated_input;
 
-//update register values during UPDATE
-always @(posedge clk) begin
+assign {rw, address, data} = stream_in;
+
+//update register values on valid write
+integer i;
+always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        reg_0x00 <= 0;
-        reg_0x01 <= 0;
-        reg_0x02 <= 0;
-        reg_0x03 <= 0;
-        reg_0x04 <= 0;
-    end else begin
-        if (state == UPDATE) begin
-            case (address)
-                0: reg_0x00 <= data;
-                1: reg_0x01 <= data;
-                2: reg_0x02 <= data;
-                3: reg_0x03 <= data;
-                4: reg_0x04 <= data;
-            endcase
-        end
+        for (i = 0; i <= MAX_ADDRESS; i = i + 1)
+            registers[i] <= 0;
+    end else if (ncs_shift_reg[0] && rw) begin
+        registers[address] <= data;
     end
     
 end
+
 endmodule

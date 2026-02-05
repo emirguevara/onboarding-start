@@ -32,11 +32,11 @@ module tt_um_uwasic_onboarding_emir (
     .SCLK(ui_in[0]),
     .COPI(ui_in[1]),
     .nCS(ui_in[2]),
-    .reg_0x00(en_reg_out_7_0),
-    .reg_0x01(en_reg_out_15_8),
-    .reg_0x02(en_reg_pwm_7_0),
-    .reg_0x03(en_reg_pwm_15_8),
-    .reg_0x04(pwm_duty_cycle)
+    .en_reg_out_7_0(en_reg_out_7_0),
+    .en_reg_out_15_8(en_reg_out_15_8),
+    .en_reg_pwm_7_0(en_reg_pwm_7_0),
+    .en_reg_pwm_15_8(en_reg_pwm_15_8),
+    .pwm_duty_cycle(pwm_duty_cycle)
 );
 
   // Instantiate the PWM module
