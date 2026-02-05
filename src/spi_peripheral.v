@@ -24,7 +24,8 @@ wire [DATA_SIZE-1:0] data;
 wire rw;
 
 reg [TRANSACTION_SIZE-1:0] stream_in;
-reg [TRANSACTION_SIZE:0] ncs_shift_reg;
+reg [$clog2(TRANSACTION_SIZE+1)-1:0] bit_count;
+reg transaction_active;
 
 //first stage of the synchronizer
 reg sclk_sync0;
@@ -52,17 +53,30 @@ assign en_reg_pwm_15_8 = registers[3];
 assign pwm_duty_cycle = registers[4];
 
 //synchronizer
-always @(posedge clk) begin
-    sclk_sync0 <= SCLK;
-    ncs_sync0 <= nCS;
-    copi_sync0 <= COPI;
-    
-    sclk_sync1 <= sclk_sync0;
-    ncs_sync1 <= ncs_sync0;
-    copi_sync1 <= copi_sync0;
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        sclk_sync0 <= 0;
+        ncs_sync0 <= 1;
+        copi_sync0 <= 0;
 
-    sclk_sync2 <= sclk_sync1;
-    ncs_sync2 <= ncs_sync1;
+        sclk_sync1 <= 0;
+        ncs_sync1 <= 1;
+        copi_sync1 <= 0;
+
+        sclk_sync2 <= 0;
+        ncs_sync2 <= 1;
+    end else begin
+        sclk_sync0 <= SCLK;
+        ncs_sync0 <= nCS;
+        copi_sync0 <= COPI;
+        
+        sclk_sync1 <= sclk_sync0;
+        ncs_sync1 <= ncs_sync0;
+        copi_sync1 <= copi_sync0;
+
+        sclk_sync2 <= sclk_sync1;
+        ncs_sync2 <= ncs_sync1;
+    end
 end
 
 //edge detection logic
@@ -70,16 +84,22 @@ assign ncs_falling = ncs_sync2 & ~ncs_sync1;
 assign sclk_rising = ~sclk_sync2 & sclk_sync1;
 
 
+wire transaction_done = transaction_active && (bit_count == TRANSACTION_SIZE);
+
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         stream_in <= 0;
-        ncs_shift_reg <= 0;
+        bit_count <= 0;
+        transaction_active <= 0;
     end else begin
-        if (ncs_falling)
-            ncs_shift_reg <= {ncs_falling, ncs_shift_reg[TRANSACTION_SIZE-1:0]};
-        if (sclk_rising) begin
-            stream_in <= {stream_in[TRANSACTION_SIZE-2:0],copi_sync1};
-            ncs_shift_reg <= ncs_shift_reg >> 1;
+        if (ncs_falling) begin
+            bit_count <= 0;
+            transaction_active <= 1;
+        end else if (sclk_rising && transaction_active) begin
+            stream_in <= {stream_in[TRANSACTION_SIZE-2:0], copi_sync1};
+            bit_count <= bit_count + 1;
+        end else if (transaction_done) begin
+            transaction_active <= 0;
         end
     end
 end
@@ -92,8 +112,8 @@ always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         for (i = 0; i <= MAX_ADDRESS; i = i + 1)
             registers[i] <= 0;
-    end else if (ncs_shift_reg[0] && rw) begin
-        registers[address] <= data;
+    end else if (transaction_done && rw && address <= MAX_ADDRESS) begin
+        registers[address[$clog2(MAX_ADDRESS+1)-1:0]] <= data;
     end
     
 end
